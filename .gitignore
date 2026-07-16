@@ -1,0 +1,27 @@
+# Dependencies
+**/node_modules/
+contracts/lib/
+
+# Foundry build artifacts
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Next.js
+web/.next/
+web/out/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Local agent tooling (not part of the game)
+.agents/
+.claude/
+skills-lock.json
+
+# OS / editor
+.DS_Store
+*.log
+*.tsbuildinfo
