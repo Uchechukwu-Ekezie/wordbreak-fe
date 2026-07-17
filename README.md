@@ -4,19 +4,18 @@
 
 <p align="center">
   <b>Live:</b> <a href="https://wordbreak-fe.vercel.app/">wordbreak-fe.vercel.app</a> ·
-  <b>Backend:</b> <a href="https://github.com/foxGrant/wordbreak-backend">wordbreak-backend</a> ·
-  <b>Contracts:</b> <a href="https://github.com/foxGrant/wordbreak-contracts">wordbreak-contracts</a>
+  <b>Backend:</b> <a href="https://github.com/wordBr/wordbreak-backend">wordbreak-backend</a> ·
+  <b>Contracts:</b> <a href="https://github.com/wordBr/wordbreak-contracts">wordbreak-contracts</a>
 </p>
 
 # WordBreak — Frontend
 
-A word game for [MiniPay](https://www.opera.com/products/minipay) on [Celo](https://celo.org).
-Spell words from a rack of letter tiles to smash a wall of bricks and climb through levels —
-free forever. Connect a wallet to race friends in multiplayer, stake cUSD for winner-takes-all
-pots, or enter the daily cUSD pool.
+A word game on [Celo](https://celo.org). Spell words from a rack of letter tiles to smash a wall
+of bricks and climb through levels — free forever. Connect a wallet to race friends in
+multiplayer, stake cUSD for winner-takes-all pots, or enter the daily cUSD pool.
 
-Next.js 15 (App Router) + [viem](https://viem.sh) — no wagmi, no connector libraries. MiniPay
-injects `window.ethereum` directly and the app talks to it with plain viem clients.
+Next.js 15 (App Router) + [viem](https://viem.sh) — no wagmi, no connector libraries. Talks
+directly to whatever wallet injects `window.ethereum`, with plain viem clients.
 
 ## What's built
 
@@ -48,7 +47,7 @@ amber, valid-green — see `app/globals.css` for the full token system.
 
 ## Run locally
 
-Needs the [backend](https://github.com/foxGrant/wordbreak-backend) running (defaults to
+Needs the [backend](https://github.com/wordBr/wordbreak-backend) running (defaults to
 `http://localhost:8080`).
 
 ```bash
@@ -82,24 +81,24 @@ See `.env.example`. The important ones:
   scored server-authoritatively (`/api/daily/submit`, `/api/room/submit`), so nobody can inspect
   network traffic to cheat.
 - `lib/` holds the integration: `config.ts` (env), `contracts.ts` (ABIs), `wallet.ts` (viem
-  clients, MiniPay detection, network auto-switch, `sendWrite` with optional CIP-64
+  clients, wallet detection, network auto-switch, `sendWrite` with optional CIP-64
   fee-currency). `app/wallet-provider.tsx` is the shared wallet context — connect once, every
   screen knows (auto-reconnect, live account-change sync).
 
-## Testing in MiniPay
+## Testing on a phone
 
-MiniPay needs HTTPS on a real device (emulators don't work).
+A mobile wallet browser needs HTTPS to reach a local dev server (emulators don't work).
 
 ```bash
 npx ngrok http 3000
 ```
 
-Open the ngrok HTTPS URL in MiniPay on an Android/iOS device. For the deployed version, just
-open `https://wordbreak-fe.vercel.app/` directly inside MiniPay's browser.
+Open the ngrok HTTPS URL in your wallet's in-app browser. For the deployed version, just open
+`https://wordbreak-fe.vercel.app/` directly.
 
 ## Status
 
 Solo, daily pool, and multiplayer (public/private/staked) are built and wired to a **live Celo
-mainnet deployment** of `WordBreakPools` (see the [contracts repo](https://github.com/foxGrant/wordbreak-contracts)
+mainnet deployment** of `WordBreakPools` (see the [contracts repo](https://github.com/wordBr/wordbreak-contracts)
 for the address). Not yet built: persistent cross-device leaderboards (currently per-device via
 localStorage — a database is the natural next step), account/name uniqueness, leagues & streaks.
