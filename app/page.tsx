@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits } from "viem";
 import { API, CUSD_ADDRESS, TREASURY, CONTINUE_PRICE, CONTINUE_SECONDS, isConfigured } from "@/lib/config";
 import { ERC20_ABI } from "@/lib/contracts";
-import { hasWallet, publicClient, sendWrite } from "@/lib/wallet";
+import { hasWallet, hasConnectChoice, publicClient, sendWrite } from "@/lib/wallet";
 import { levelDef, starsFor, loadProgress, saveResult, totalStars, type Progress } from "@/lib/levels";
 import {
   gridLevelDef,
@@ -97,7 +97,10 @@ export default function Game() {
   const [gridError, setGridError] = useState<string | null>(null);
 
   // wallet — shared app-wide via context (connect once, known everywhere)
-  const { account, name, setName, connecting, error: connectErr, connect: doConnect, disconnect } = useWallet();
+  const {
+    account, name, setName, connecting, error: connectErr,
+    connect: doConnect, connectInjected, connectWalletConnect, disconnect,
+  } = useWallet();
   const [balance, setBalance] = useState<bigint | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -343,9 +346,24 @@ export default function Game() {
           <button className="btn primary gate-btn" onClick={() => { music.start(); setMusicOn(true); setView("home"); }}>
             ▶ Play free
           </button>
-          <button className="btn ghost gate-btn" style={{ marginTop: 10 }} onClick={doConnect} disabled={connecting}>
-            {connecting ? "Connecting…" : account ? `⚡ ${shortAcct}` : hasWallet() ? "⚡ Connect wallet" : "🔗 Connect wallet"}
-          </button>
+          {account ? (
+            <button className="btn ghost gate-btn" style={{ marginTop: 10 }} onClick={doConnect} disabled={connecting}>
+              ⚡ {shortAcct}
+            </button>
+          ) : hasConnectChoice() ? (
+            <div style={{ display: "flex", gap: 8, marginTop: 10, width: "100%" }}>
+              <button className="btn ghost gate-btn" style={{ flex: 1 }} onClick={connectInjected} disabled={connecting}>
+                {connecting ? "Connecting…" : "⚡ MetaMask"}
+              </button>
+              <button className="btn ghost gate-btn" style={{ flex: 1 }} onClick={connectWalletConnect} disabled={connecting}>
+                {connecting ? "Connecting…" : "🔗 WalletConnect"}
+              </button>
+            </div>
+          ) : (
+            <button className="btn ghost gate-btn" style={{ marginTop: 10 }} onClick={doConnect} disabled={connecting}>
+              {connecting ? "Connecting…" : hasWallet() ? "⚡ Connect wallet" : "🔗 Connect wallet"}
+            </button>
+          )}
           {connectErr && <p className="tx-note err">{connectErr}</p>}
           <p className="gate-note mono">Free to play. Connect anytime to win cUSD &amp; save progress.</p>
         </div>

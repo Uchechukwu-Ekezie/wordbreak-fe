@@ -3,6 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import {
   connect as rawConnect,
+  connectInjected as rawConnectInjected,
+  connectWalletConnect as rawConnectWalletConnect,
   injectedProvider,
   disconnectActive,
   subscribeActiveProviderEvents,
@@ -16,6 +18,8 @@ type WalletState = {
   connecting: boolean;
   error: string | null;
   connect: () => Promise<void>;
+  connectInjected: () => Promise<void>;
+  connectWalletConnect: () => Promise<void>;
   disconnect: () => void;
 };
 
@@ -41,14 +45,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined") localStorage.setItem("wb_name", t);
   }, []);
 
-  const connect = useCallback(async () => {
+  const finishConnect = useCallback(async (fn: () => Promise<`0x${string}`>) => {
     setError(null);
     setConnecting(true);
     try {
-      const addr = await rawConnect();
+      const addr = await fn();
       setAccount(addr);
-      // rawConnect() may have activated either the injected or the WalletConnect provider —
-      // (re)subscribe now that it's known which one.
+      // fn() activated either the injected or the WalletConnect provider — (re)subscribe now
+      // that it's known which one.
       subscribeActiveProviderEvents(
         (a) => setAccount(a?.[0] ? (a[0] as `0x${string}`) : null),
         () => setAccount(null),
@@ -60,6 +64,14 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       setConnecting(false);
     }
   }, []);
+
+  // Smart default (injected first, WalletConnect fallback) — used by deep call sites
+  // (buy-time, staked-room gates, settings) that just need "get connected, whatever works".
+  const connect = useCallback(() => finishConnect(rawConnect), [finishConnect]);
+  // Explicit choices — used by primary connect entry points so a user with both an injected
+  // wallet AND WalletConnect available can pick, instead of always silently getting injected.
+  const connectInjected = useCallback(() => finishConnect(rawConnectInjected), [finishConnect]);
+  const connectWalletConnect = useCallback(() => finishConnect(rawConnectWalletConnect), [finishConnect]);
 
   const disconnect = useCallback(() => {
     void disconnectActive(); // best-effort session teardown (WalletConnect); no-op for injected
@@ -98,7 +110,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const needsName = Boolean(account) && !name;
 
   return (
-    <Ctx.Provider value={{ account, name, setName, connecting, error, connect, disconnect }}>
+    <Ctx.Provider
+      value={{ account, name, setName, connecting, error, connect, connectInjected, connectWalletConnect, disconnect }}
+    >
       {children}
       {needsName && (
         <div className="overlay">

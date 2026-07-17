@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits } from "viem";
 import { API, POOLS_ADDRESS, CUSD_ADDRESS, isConfigured } from "@/lib/config";
 import { POOLS_ABI, ERC20_ABI } from "@/lib/contracts";
-import { hasWallet, publicClient, sendWrite } from "@/lib/wallet";
+import { hasWallet, hasConnectChoice, publicClient, sendWrite } from "@/lib/wallet";
 import { useWallet } from "../wallet-provider";
 
 const PLAY_SECONDS = 90;
@@ -39,7 +39,7 @@ type LB = { rank: number; address: string; score: number; words: number }[];
 type View = "loading" | "no-pool" | "lobby" | "playing" | "done";
 
 export default function Daily() {
-  const { account: address, connect: onConnect } = useWallet();
+  const { account: address, connect: onConnect, connectInjected, connectWalletConnect } = useWallet();
   const [view, setView] = useState<View>("loading");
   const [info, setInfo] = useState<DailyInfo | null>(null);
   const [round, setRound] = useState<Round | null>(null);
@@ -269,9 +269,16 @@ export default function Daily() {
         </section>
 
         {!address ? (
-          <button className="btn primary" onClick={onConnect}>
-            {hasWallet() ? "Connect wallet" : "🔗 Connect wallet"}
-          </button>
+          hasConnectChoice() ? (
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn primary" style={{ flex: 1 }} onClick={connectInjected}>⚡ MetaMask</button>
+              <button className="btn primary" style={{ flex: 1 }} onClick={connectWalletConnect}>🔗 WalletConnect</button>
+            </div>
+          ) : (
+            <button className="btn primary" onClick={onConnect}>
+              {hasWallet() ? "Connect wallet" : "🔗 Connect wallet"}
+            </button>
+          )
         ) : (
           <>
             <div className="addr mono">{short(address)}{entered ? " · entered ✓" : ""}</div>

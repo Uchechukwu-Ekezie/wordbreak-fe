@@ -177,7 +177,10 @@ async function ensureChain(eth: any): Promise<void> {
   }
 }
 
-async function connectInjected(): Promise<`0x${string}`> {
+// Exported so callers can offer an explicit choice when more than one path is available
+// (e.g. a desktop browser with both MetaMask installed and WalletConnect configured) instead
+// of always silently picking one.
+export async function connectInjected(): Promise<`0x${string}`> {
   const eth = ethereum();
   const accounts: string[] = await eth.request({ method: "eth_requestAccounts" });
   const address = accounts?.[0];
@@ -187,7 +190,7 @@ async function connectInjected(): Promise<`0x${string}`> {
   return address as `0x${string}`;
 }
 
-async function connectWalletConnect(): Promise<`0x${string}`> {
+export async function connectWalletConnect(): Promise<`0x${string}`> {
   const p = await getWalletConnectProvider();
   const accounts: string[] = await p.enable();
   const address = accounts?.[0];
@@ -196,8 +199,16 @@ async function connectWalletConnect(): Promise<`0x${string}`> {
   return address as `0x${string}`;
 }
 
-// Injected wallet (MiniPay, MetaMask, ...) if present, else WalletConnect QR pairing if
-// configured, else the original "no wallet" error — unchanged behavior when WC isn't set up.
+// True when the caller should offer a choice instead of auto-picking (both an injected
+// wallet AND WalletConnect are available).
+export function hasConnectChoice(): boolean {
+  return hasWallet() && Boolean(WC_PROJECT_ID);
+}
+
+// Smart default for call sites that just need "get connected, whatever's available" (buy-time
+// gates, staked-room gates, settings) — injected first, WalletConnect fallback, unchanged
+// behavior when WC isn't configured. Primary "Connect" entry points (landing gate, daily page)
+// use connectInjected/connectWalletConnect directly instead, to offer a real choice.
 export async function connect(): Promise<`0x${string}`> {
   if (hasWallet()) return connectInjected();
   if (WC_PROJECT_ID) return connectWalletConnect();
