@@ -6,7 +6,7 @@
 
 import { createPublicClient, http, type Abi, type Chain, type PublicClient } from "viem";
 import { celo } from "viem/chains";
-import { getWalletClient } from "@wagmi/core";
+import { writeContract } from "@wagmi/core";
 import { CHAIN_ID, RPC_URL, FEE_CURRENCY } from "./config";
 import { wagmiAdapter } from "./appkit-config";
 
@@ -31,12 +31,15 @@ export function feeCurrencyOpt(): { feeCurrency?: `0x${string}` } {
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// One place to send a contract write. `feeCurrency` (Celo CIP-64) isn't in viem's generic
-// writeContract type, so we cast through here rather than at every call site.
+// One place to send a contract write. Goes through wagmi's own `writeContract` action (not a
+// raw viem WalletClient) — it resolves the client via the active connector and only asserts
+// the current chain when a chainId is explicitly passed. Reown/WalletConnect's provider reports
+// the chain as a CAIP-2 string (e.g. "eip155:42220"), which raw viem's chain assertion can't
+// parse; omitting chainId here sidesteps that entirely instead of fighting the format mismatch.
+// `feeCurrency` (Celo CIP-64) isn't in wagmi's generic writeContract type, so we cast through.
 export async function sendWrite(
   account: `0x${string}`,
   params: { address: `0x${string}`; abi: Abi; functionName: string; args?: readonly unknown[] },
 ): Promise<`0x${string}`> {
-  const wc = await getWalletClient(wagmiAdapter.wagmiConfig, { account });
-  return wc.writeContract({ account, chain, ...params, ...feeCurrencyOpt() } as any) as Promise<`0x${string}`>;
+  return writeContract(wagmiAdapter.wagmiConfig, { account, ...params, ...feeCurrencyOpt() } as any) as Promise<`0x${string}`>;
 }
