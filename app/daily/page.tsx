@@ -6,6 +6,7 @@ import { formatUnits } from "viem";
 import { API, POOLS_ADDRESS, CUSD_ADDRESS, isConfigured } from "@/lib/config";
 import { POOLS_ABI, ERC20_ABI } from "@/lib/contracts";
 import { publicClient, sendWrite } from "@/lib/wallet";
+import { celoNeededForCusd, mentoAvailable, swapCeloForCusd } from "@/lib/mento";
 import { useWallet } from "../wallet-provider";
 
 const PLAY_SECONDS = 90;
@@ -117,6 +118,25 @@ export default function Daily() {
     if (!address || !round || !roundId) return;
     setError(null);
     try {
+      // Don't require players to already hold cUSD — top up the shortfall from their CELO via
+      // Mento first. A 3% buffer on the CELO side absorbs normal price movement between the
+      // quote and the swap confirming; amountOutMin still guarantees at least the shortfall.
+      if (mentoAvailable()) {
+        const cusdBalance = (await publicClient.readContract({
+          address: CUSD_ADDRESS, abi: ERC20_ABI, functionName: "balanceOf", args: [address],
+        })) as bigint;
+        if (cusdBalance < round.entryFee) {
+          const shortfall = round.entryFee - cusdBalance;
+          setBusy("Getting cUSD…");
+          const celoQuote = await celoNeededForCusd(shortfall);
+          const celoIn = (celoQuote * 103n) / 100n;
+          const celoBalance = await publicClient.getBalance({ address });
+          if (celoBalance < celoIn) throw new Error("Not enough CELO to cover the entry fee.");
+          const sh = await swapCeloForCusd(address, celoIn, shortfall);
+          await publicClient.waitForTransactionReceipt({ hash: sh });
+        }
+      }
+
       // Approve only if needed.
       const allowance = (await publicClient.readContract({
         address: CUSD_ADDRESS, abi: ERC20_ABI, functionName: "allowance", args: [address, POOLS_ADDRESS],
