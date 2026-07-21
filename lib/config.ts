@@ -21,7 +21,11 @@ export const CONTINUE_SECONDS = Number(process.env.NEXT_PUBLIC_CONTINUE_SECONDS 
 
 export const isConfigured = () => Boolean(POOLS_ADDRESS && CUSD_ADDRESS);
 
-// WalletConnect (QR pairing) — an additive fallback for wallets that don't inject
-// window.ethereum (desktop browsers, mobile wallets connecting via scan). Get a project ID
-// from https://dashboard.walletconnect.com. Unset = the feature is inert, no behavior change.
+// WalletConnect (QR pairing) — passed through to Privy so its "wallet" login option can
+// pair with mobile wallets that don't inject window.ethereum. Get a project ID from
+// https://dashboard.walletconnect.com. Unset = WalletConnect pairing is inert, no behavior change.
 export const WC_PROJECT_ID = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "";
+
+// Privy (email/social login + embedded wallet). Get an App ID from https://dashboard.privy.io.
+// Unset = createAppKit-equivalent init is skipped; see app/providers.tsx.
+export const PRIVY_APP_ID = process.env.NEXT_PUBLIC_PRIVY_APP_ID || "";
