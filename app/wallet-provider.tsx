@@ -1,7 +1,8 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { useAppKit, useAppKitAccount, useDisconnect } from "@reown/appkit/react";
+import { useLogin, useLogout, usePrivy } from "@privy-io/react-auth";
+import { useAccount, useDisconnect as useWagmiDisconnect } from "wagmi";
 
 type WalletState = {
   account: `0x${string}` | null;
@@ -22,14 +23,25 @@ export function useWallet(): WalletState {
 }
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
-  const { open } = useAppKit();
-  const { address, isConnected } = useAppKitAccount();
-  const { disconnect: appKitDisconnect } = useDisconnect();
+  const { ready } = usePrivy();
+  const { address, isConnected } = useAccount();
+  const { disconnect: wagmiDisconnect } = useWagmiDisconnect();
 
   const [name, setNameState] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+
+  // Privy's login() doesn't return a promise that resolves on completion -- it just opens
+  // the modal, and completion/cancellation come back later via these callbacks.
+  const { login } = useLogin({
+    onComplete: () => setConnecting(false),
+    onError: (e) => {
+      setConnecting(false);
+      setError(e === "exited_auth_flow" ? "Connection cancelled." : e);
+    },
+  });
+  const { logout } = useLogout();
 
   const account = isConnected && address ? (address as `0x${string}`) : null;
 
@@ -39,26 +51,22 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined") localStorage.setItem("wb_name", t);
   }, []);
 
-  // AppKit's own modal offers injected wallets, WalletConnect QR pairing, and email/social
-  // login all in one place — connect() just opens it.
+  // Privy's own modal offers MiniPay/browser wallets, WalletConnect QR pairing, and
+  // email/social login all in one place — connect() just opens it.
   const connect = useCallback(async () => {
+    if (!ready) return;
     setError(null);
     setConnecting(true);
-    try {
-      await open();
-    } catch (e: unknown) {
-      const m = (e as { shortMessage?: string; message?: string })?.shortMessage
-        || (e as { message?: string })?.message
-        || String(e);
-      setError(/user rejected/i.test(m) ? "Connection cancelled." : m);
-    } finally {
-      setConnecting(false);
-    }
-  }, [open]);
+    login();
+  }, [ready, login]);
 
+  // Logs out of Privy (clears its session/auth tokens) and disconnects wagmi's active
+  // connector -- an external wallet (MetaMask, MiniPay) stays connected in wagmi otherwise,
+  // since Privy's own logout only tears down its own session.
   const disconnect = useCallback(() => {
-    void appKitDisconnect();
-  }, [appKitDisconnect]);
+    void logout();
+    wagmiDisconnect();
+  }, [logout, wagmiDisconnect]);
 
   useEffect(() => {
     if (typeof window !== "undefined") setNameState(localStorage.getItem("wb_name") || "");
