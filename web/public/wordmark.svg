@@ -1,0 +1,60 @@
+<svg width="1700" height="360" viewBox="0 0 1700 360" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@700&amp;display=swap');</style>
+    <radialGradient id="bg" cx="30%" cy="10%" r="100%">
+      <stop offset="0%" stop-color="#3b2b86"/>
+      <stop offset="45%" stop-color="#1b1442"/>
+      <stop offset="100%" stop-color="#0f0a24"/>
+    </radialGradient>
+
+    <linearGradient id="tW" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/><stop offset="100%" stop-color="#ded3ff"/>
+    </linearGradient>
+    <linearGradient id="tO" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffd479"/><stop offset="100%" stop-color="#ffc24b"/>
+    </linearGradient>
+    <linearGradient id="tR" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ff77a8"/><stop offset="100%" stop-color="#ff4d8d"/>
+    </linearGradient>
+    <linearGradient id="tD" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#86a0ff"/><stop offset="100%" stop-color="#5b7cff"/>
+    </linearGradient>
+
+    <g id="hi"><rect width="132" height="30" rx="15" fill="#ffffff" opacity="0.5"/></g>
+  </defs>
+
+  <rect width="1700" height="360" rx="0" fill="url(#bg)"/>
+
+  <!-- four keycap tiles: W O R D -->
+  <g font-family="Fredoka, 'Baloo 2', 'Segoe UI Rounded', system-ui, sans-serif" font-weight="700" font-size="88" text-anchor="middle">
+    <!-- W -->
+    <rect x="60"  y="146" width="132" height="132" rx="28" fill="#2b2159"/>
+    <rect x="60"  y="128" width="132" height="132" rx="28" fill="url(#tW)"/>
+    <use href="#hi" x="60" y="128"/>
+    <text x="126" y="222" fill="#16112e">W</text>
+
+    <!-- O -->
+    <rect x="208" y="146" width="132" height="132" rx="28" fill="#b07b16"/>
+    <rect x="208" y="128" width="132" height="132" rx="28" fill="url(#tO)"/>
+    <use href="#hi" x="208" y="128"/>
+    <text x="274" y="222" fill="#16112e">O</text>
+
+    <!-- R -->
+    <rect x="356" y="146" width="132" height="132" rx="28" fill="#b02360"/>
+    <rect x="356" y="128" width="132" height="132" rx="28" fill="url(#tR)"/>
+    <use href="#hi" x="356" y="128"/>
+    <text x="422" y="222" fill="#ffffff">R</text>
+
+    <!-- D -->
+    <rect x="504" y="146" width="132" height="132" rx="28" fill="#2f3fae"/>
+    <rect x="504" y="128" width="132" height="132" rx="28" fill="url(#tD)"/>
+    <use href="#hi" x="504" y="128"/>
+    <text x="570" y="222" fill="#ffffff">D</text>
+  </g>
+
+  <!-- wordmark -->
+  <text x="670" y="235" font-family="Fredoka, 'Baloo 2', 'Segoe UI Rounded', system-ui, sans-serif"
+        font-weight="700" font-size="118">
+    <tspan fill="#ffffff">WORD</tspan><tspan fill="#ff4d8d">BREAK</tspan><tspan fill="#5b7cff">.</tspan>
+  </text>
+</svg>

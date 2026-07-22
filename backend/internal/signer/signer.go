@@ -1,7 +1,8 @@
 // Package signer is the referee's cryptographic authority. It produces the EIP-712
-// signatures that WordBreakPools.settle() verifies before paying out — the bridge between
-// the off-chain game result and the on-chain money. The domain and types here MUST match
-// the contract exactly (name "WordBreakPools", version "1", the Settlement struct).
+// signatures that WordBreakPools.settle() and .recordScore() verify before acting — the
+// bridge between the off-chain game result and the on-chain money (settle) or on-chain
+// history (recordScore). The domain and types here MUST match the contract exactly (name
+// "WordBreakPools", version "1", the Settlement and Score structs).
 package signer
 
 import (
@@ -79,6 +80,73 @@ func (s *Signer) SignSettlement(roundID *big.Int, winners []common.Address, amou
 	// go-ethereum returns v as 0/1; Solidity ecrecover wants 27/28.
 	sig[64] += 27
 	return sig, nil
+}
+
+// ScoreDigest returns the 32-byte EIP-712 digest for one recorded score (the value that gets
+// signed). attempt must equal the contract's current on-chain scoreCount(roundId, player) —
+// it's a nonce, so each digest is only ever valid for that one specific attempt.
+func (s *Signer) ScoreDigest(roundID *big.Int, player common.Address, score, attempt *big.Int) ([]byte, error) {
+	td := s.scoreTypedData(roundID, player, score, attempt)
+	domainSep, err := td.HashStruct("EIP712Domain", td.Domain.Map())
+	if err != nil {
+		return nil, fmt.Errorf("hash domain: %w", err)
+	}
+	msgHash, err := td.HashStruct(td.PrimaryType, td.Message)
+	if err != nil {
+		return nil, fmt.Errorf("hash message: %w", err)
+	}
+	raw := make([]byte, 0, 2+len(domainSep)+len(msgHash))
+	raw = append(raw, 0x19, 0x01)
+	raw = append(raw, domainSep...)
+	raw = append(raw, msgHash...)
+	return crypto.Keccak256(raw), nil
+}
+
+// SignScore signs one recorded score and returns the 65-byte signature (r||s||v with v in
+// {27,28}), ready for WordBreakPools.recordScore(roundId, player, score, attempt, signature).
+func (s *Signer) SignScore(roundID *big.Int, player common.Address, score, attempt *big.Int) ([]byte, error) {
+	digest, err := s.ScoreDigest(roundID, player, score, attempt)
+	if err != nil {
+		return nil, err
+	}
+	sig, err := crypto.Sign(digest, s.key)
+	if err != nil {
+		return nil, fmt.Errorf("sign: %w", err)
+	}
+	sig[64] += 27
+	return sig, nil
+}
+
+func (s *Signer) scoreTypedData(roundID *big.Int, player common.Address, score, attempt *big.Int) apitypes.TypedData {
+	return apitypes.TypedData{
+		Types: apitypes.Types{
+			"EIP712Domain": {
+				{Name: "name", Type: "string"},
+				{Name: "version", Type: "string"},
+				{Name: "chainId", Type: "uint256"},
+				{Name: "verifyingContract", Type: "address"},
+			},
+			"Score": {
+				{Name: "roundId", Type: "uint256"},
+				{Name: "player", Type: "address"},
+				{Name: "score", Type: "uint256"},
+				{Name: "attempt", Type: "uint256"},
+			},
+		},
+		PrimaryType: "Score",
+		Domain: apitypes.TypedDataDomain{
+			Name:              "WordBreakPools",
+			Version:           "1",
+			ChainId:           (*math.HexOrDecimal256)(s.chainID),
+			VerifyingContract: s.verifyingContract.Hex(),
+		},
+		Message: apitypes.TypedDataMessage{
+			"roundId": roundID,
+			"player":  player.Hex(),
+			"score":   score,
+			"attempt": attempt,
+		},
+	}
 }
 
 func (s *Signer) typedData(roundID *big.Int, winners []common.Address, amounts []*big.Int) apitypes.TypedData {

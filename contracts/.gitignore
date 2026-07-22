@@ -1,0 +1,17 @@
+# Dependencies (restored via `forge install`, pinned by foundry.lock) — anchored to root
+# so this doesn't also match script/lib/ (our own source, not a dependency).
+/lib/
+
+# Build artifacts
+out/
+cache/
+broadcast/
+
+# Secrets — REAL private keys live in these on this project. Never commit.
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+*.log

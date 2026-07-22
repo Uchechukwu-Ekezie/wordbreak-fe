@@ -5,9 +5,14 @@ import {Test, console} from "forge-std/Test.sol";
 import {WordBreakPools} from "../src/WordBreakPools.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {DeployProxy} from "../script/lib/DeployProxy.sol";
+import {WordBreakPoolsV2Mock} from "./mocks/WordBreakPoolsV2Mock.sol";
 
 contract WordBreakPoolsTest is Test {
     WordBreakPools internal pool;
+    address internal implementation;
     MockERC20 internal token;
 
     uint256 internal refereePk = 0xA11CE;
@@ -28,7 +33,8 @@ contract WordBreakPoolsTest is Test {
     function setUp() public {
         referee = vm.addr(refereePk);
         token = new MockERC20();
-        pool = new WordBreakPools(address(token), referee, treasury, RAKE_BPS, REFUND_DELAY, owner);
+        (pool, implementation) =
+            DeployProxy.deploy(address(token), referee, treasury, RAKE_BPS, REFUND_DELAY, owner);
 
         endTime = uint64(block.timestamp + 1 hours);
 
@@ -63,6 +69,26 @@ contract WordBreakPoolsTest is Test {
         bytes32 digest = pool.settlementDigest(roundId, winners, amounts);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(refereePk, digest);
         return abi.encodePacked(r, s, v);
+    }
+
+    function _signScore(uint256 roundId, address player, uint256 score, uint256 attempt)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes32 digest = pool.scoreDigest(roundId, player, score, attempt);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(refereePk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    /// @dev Signs and records the next score for `player` in `roundId`, using whatever attempt
+    ///      index the contract currently expects -- mirrors how the backend would call it after
+    ///      every play, without the test needing to track the counter by hand.
+    function _recordNextScore(uint256 roundId, address player, uint256 score) internal {
+        uint256 attempt = pool.scoreCount(roundId, player);
+        pool.recordScore(
+            roundId, player, score, attempt, _signScore(roundId, player, score, attempt)
+        );
     }
 
     // --- entry ---
@@ -300,6 +326,100 @@ contract WordBreakPoolsTest is Test {
         pool.claimRefund(ROUND_ID);
     }
 
+    // --- per-player scores (recorded immediately, independent of settlement) ---
+
+    function test_RecordScore_SucceedsAsSoonAsPlayerFinishes() public {
+        _createRound();
+        _enterAll();
+        // Alice finishes well before entry even closes, let alone settlement -- recordScore
+        // has no dependency on endTime or on the round being settled.
+        _recordNextScore(ROUND_ID, alice, 42);
+
+        assertEq(pool.scoreCount(ROUND_ID, alice), 1);
+        assertEq(pool.getScores(ROUND_ID, alice)[0], 42);
+        // Recording a score never touches the pot or anyone's claimable balance.
+        assertEq(pool.getRound(ROUND_ID).pot, 3 * uint256(ENTRY_FEE));
+        assertEq(pool.claimable(alice), 0);
+    }
+
+    function test_RecordScore_KeepsEveryAttemptNotJustTheBest() public {
+        _createRound();
+        _enterAll();
+
+        _recordNextScore(ROUND_ID, alice, 10); // a weak first attempt...
+        _recordNextScore(ROUND_ID, alice, 42); // ...then a much better one later the same day
+
+        uint256[] memory scores = pool.getScores(ROUND_ID, alice);
+        assertEq(scores.length, 2);
+        assertEq(scores[0], 10);
+        assertEq(scores[1], 42);
+        assertEq(pool.scoreCount(ROUND_ID, alice), 2);
+    }
+
+    function test_RecordScore_RevertsIfNeverEntered() public {
+        _createRound();
+        bytes memory sig = _signScore(ROUND_ID, alice, 10, 0);
+        vm.expectRevert(WordBreakPools.NotEntered.selector);
+        pool.recordScore(ROUND_ID, alice, 10, 0, sig);
+    }
+
+    function test_RecordScore_RevertsOnWrongAttemptIndex() public {
+        _createRound();
+        _enterAll();
+        // attempt 0 hasn't been recorded yet, so attempt 1 is out of order.
+        bytes memory sig = _signScore(ROUND_ID, alice, 10, 1);
+        vm.expectRevert(WordBreakPools.InvalidAttempt.selector);
+        pool.recordScore(ROUND_ID, alice, 10, 1, sig);
+    }
+
+    function test_RecordScore_RevertsOnReplayedSignatureAfterNewAttempt() public {
+        _createRound();
+        _enterAll();
+        bytes memory sig0 = _signScore(ROUND_ID, alice, 10, 0);
+        pool.recordScore(ROUND_ID, alice, 10, 0, sig0);
+
+        // a fresh attempt has since landed (attempt 1) -- replaying the attempt-0 signature
+        // must fail rather than silently re-recording it as attempt 0 again.
+        vm.expectRevert(WordBreakPools.InvalidAttempt.selector);
+        pool.recordScore(ROUND_ID, alice, 10, 0, sig0);
+    }
+
+    function test_RecordScore_RevertsOnBadSignature() public {
+        _createRound();
+        _enterAll();
+        // signed by someone other than the referee
+        (, uint256 impostorPk) = makeAddrAndKey("impostor");
+        bytes32 digest = pool.scoreDigest(ROUND_ID, alice, 10, 0);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(impostorPk, digest);
+        bytes memory badSig = abi.encodePacked(r, s, v);
+
+        vm.expectRevert(WordBreakPools.BadSignature.selector);
+        pool.recordScore(ROUND_ID, alice, 10, 0, badSig);
+    }
+
+    function test_RecordScore_RevertsOnUnknownRound() public {
+        bytes memory sig = _signScore(9999, alice, 10, 0);
+        vm.expectRevert(WordBreakPools.RoundNotFound.selector);
+        pool.recordScore(9999, alice, 10, 0, sig);
+    }
+
+    function test_RecordScore_WorksAfterSettlementToo() public {
+        _createRound();
+        _enterAll();
+        vm.warp(endTime);
+
+        address[] memory winners = new address[](1);
+        winners[0] = alice;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = 2e18;
+        pool.settle(ROUND_ID, winners, amounts, _sign(ROUND_ID, winners, amounts));
+
+        // A late score submission for a different entrant is still just a data record --
+        // settlement being done doesn't lock it out.
+        _recordNextScore(ROUND_ID, bob, 7);
+        assertEq(pool.getScores(ROUND_ID, bob)[0], 7);
+    }
+
     // --- EIP-712 encoding: independent digest reconstruction ---
     // The `_sign` helper signs whatever `pool.settlementDigest` returns, so it can't catch an
     // encoding bug. This rebuilds the digest from raw EIP-712 fields — explicitly padding each
@@ -321,12 +441,18 @@ contract WordBreakPoolsTest is Test {
 
     /// @dev Logs the canonical digest so the Go referee signer can cross-check byte-for-byte.
     ///      Run: forge test --match-test test_LogCanonicalDigest -vv
+    /// @dev The digest is bound to `address(this)` (the PROXY, per EIP-712 `verifyingContract`)
+    ///      via `_hashTypedDataV4`, so we deploy the proxy itself at a fixed CREATE2 address —
+    ///      the implementation's address is irrelevant to the digest.
     function test_LogCanonicalDigest() public {
         // Deploy at a FIXED address + chainId so the Go test can reproduce the domain exactly.
         vm.chainId(42220);
-        WordBreakPools fixedPool = new WordBreakPools{salt: bytes32(uint256(1))}(
-            address(token), referee, treasury, RAKE_BPS, REFUND_DELAY, owner
+        address impl = address(new WordBreakPools(address(token)));
+        bytes memory initData = abi.encodeCall(
+            WordBreakPools.initialize, (referee, treasury, RAKE_BPS, REFUND_DELAY, owner)
         );
+        ERC1967Proxy proxy = new ERC1967Proxy{salt: bytes32(uint256(1))}(impl, initData);
+        WordBreakPools fixedPool = WordBreakPools(address(proxy));
 
         address[] memory winners = new address[](2);
         winners[0] = 0x00000000000000000000000000000000000000A1;
@@ -339,6 +465,26 @@ contract WordBreakPoolsTest is Test {
         console.log("XCHECK_POOL", address(fixedPool));
         console.log("XCHECK_CHAINID", block.chainid);
         console.log("XCHECK_DIGEST");
+        console.logBytes32(digest);
+    }
+
+    /// @dev Same fixed-address trick as `test_LogCanonicalDigest`, for `scoreDigest`. Logs the
+    ///      digest so the Go referee signer's ScoreDigest can be cross-checked byte-for-byte.
+    ///      Run: forge test --match-test test_LogCanonicalScoreDigest -vv
+    function test_LogCanonicalScoreDigest() public {
+        vm.chainId(42220);
+        address impl = address(new WordBreakPools(address(token)));
+        bytes memory initData = abi.encodeCall(
+            WordBreakPools.initialize, (referee, treasury, RAKE_BPS, REFUND_DELAY, owner)
+        );
+        ERC1967Proxy proxy = new ERC1967Proxy{salt: bytes32(uint256(1))}(impl, initData);
+        WordBreakPools fixedPool = WordBreakPools(address(proxy));
+
+        bytes32 digest =
+            fixedPool.scoreDigest(20260716, 0x00000000000000000000000000000000000000A1, 42, 0);
+        console.log("XCHECK_SCORE_POOL", address(fixedPool));
+        console.log("XCHECK_SCORE_CHAINID", block.chainid);
+        console.log("XCHECK_SCORE_DIGEST");
         console.logBytes32(digest);
     }
 
@@ -444,5 +590,72 @@ contract WordBreakPoolsTest is Test {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
         pool.setReferee(address(0x1234));
+    }
+
+    // --- upgradeability (UUPS) ---
+
+    function test_Upgrade_CannotInitializeTwice() public {
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        pool.initialize(referee, treasury, RAKE_BPS, REFUND_DELAY, owner);
+    }
+
+    function test_Upgrade_ImplementationCannotBeInitializedDirectly() public {
+        // The bare implementation (never behind a proxy) had _disableInitializers() run in
+        // its constructor — initialize() must revert there too, closing the classic UUPS
+        // "anyone calls initialize on the implementation and takes it over" footgun.
+        WordBreakPools bareImpl = WordBreakPools(implementation);
+        vm.expectRevert(Initializable.InvalidInitialization.selector);
+        bareImpl.initialize(referee, treasury, RAKE_BPS, REFUND_DELAY, owner);
+    }
+
+    function test_Upgrade_OnlyOwnerCanAuthorize() public {
+        WordBreakPoolsV2Mock v2 = new WordBreakPoolsV2Mock(address(token));
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        pool.upgradeToAndCall(address(v2), "");
+    }
+
+    /// @dev The actual proof: create a round + collect a real deposit on V1, upgrade to V2,
+    ///      then confirm (a) that round's state is byte-identical after the upgrade, (b) the
+    ///      pot is still fully claimable through the *unchanged* V1 functions, and (c) the new
+    ///      V2-only feature is now live at the same address. This is what "upgradeable" has to
+    ///      mean in practice — not just that the call succeeds.
+    function test_Upgrade_PreservesStateAndAddsNewFeature() public {
+        _createRound();
+        vm.prank(alice);
+        pool.enter(ROUND_ID);
+
+        WordBreakPools.Round memory before = pool.getRound(ROUND_ID);
+        assertEq(before.pot, ENTRY_FEE);
+        assertEq(before.entrants, 1);
+        assertTrue(pool.hasEntered(ROUND_ID, alice));
+
+        WordBreakPoolsV2Mock v2 = new WordBreakPoolsV2Mock(address(token));
+        pool.upgradeToAndCall(address(v2), "");
+
+        // Old state, read through the SAME storage slots, is untouched by the upgrade.
+        WordBreakPools.Round memory afterUpgrade = pool.getRound(ROUND_ID);
+        assertEq(afterUpgrade.pot, before.pot);
+        assertEq(afterUpgrade.entrants, before.entrants);
+        assertTrue(pool.hasEntered(ROUND_ID, alice));
+        assertEq(pool.owner(), owner);
+        assertEq(pool.referee(), referee);
+
+        // The old round can still be settled normally post-upgrade — V1 logic is intact.
+        vm.warp(endTime);
+        address[] memory winners = new address[](1);
+        winners[0] = alice;
+        uint256[] memory amounts = new uint256[](1);
+        amounts[0] = (ENTRY_FEE * (10_000 - RAKE_BPS)) / 10_000;
+        bytes memory sig = _sign(ROUND_ID, winners, amounts);
+        pool.settle(ROUND_ID, winners, amounts, sig);
+        assertEq(pool.claimable(alice), amounts[0]);
+
+        // The new V2-only feature is live, at the SAME proxy address.
+        WordBreakPoolsV2Mock poolV2 = WordBreakPoolsV2Mock(address(pool));
+        assertEq(poolV2.newFeature(), 0);
+        poolV2.setNewFeature(42);
+        assertEq(poolV2.newFeature(), 42);
+        assertEq(poolV2.version(), "2.0.0");
     }
 }

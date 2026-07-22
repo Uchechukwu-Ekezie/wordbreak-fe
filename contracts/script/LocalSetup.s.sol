@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Script, console} from "forge-std/Script.sol";
 import {WordBreakPools} from "../src/WordBreakPools.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
+import {DeployProxy} from "./lib/DeployProxy.sol";
 
 /// @notice LOCAL-ONLY: deploys mock cUSD + WordBreakPools on Anvil, funds two players, opens
 ///         round #1. Uses Anvil's default accounts (referee = account[1], matching the Go
@@ -19,7 +20,8 @@ contract LocalSetup is Script {
 
         vm.startBroadcast(deployerPk);
         MockERC20 token = new MockERC20();
-        WordBreakPools pool = new WordBreakPools(address(token), referee, treasury, 500, 2 days, owner);
+        (WordBreakPools pool,) =
+            DeployProxy.deploy(address(token), referee, treasury, 500, 2 days, owner);
         token.mint(alice, 100e18);
         token.mint(bob, 100e18);
         pool.createRound(1, 1e18, uint64(block.timestamp + 1 hours));

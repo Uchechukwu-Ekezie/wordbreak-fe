@@ -5,26 +5,41 @@
 //	GET  /health
 //	GET  /api/referee                      -> referee address (to configure the contract)
 //	GET  /api/solo/rack?size=6             -> a fresh solo rack (answers withheld)
+//	GET  /api/solo/grid?size=4             -> a fresh solo grid board (Boggle-style, answers included)
 //	POST /api/solo/score                   -> score {letters, words[]}
 //	GET  /api/daily                        -> today's shared rack
-//	POST /api/daily/submit                 -> submit {address, words[]} for today
+//	POST /api/daily/submit                 -> submit {address, words[]} for today (for a paid
+//	                                           round, also logs this play's score on-chain via
+//	                                           WordBreakPools.recordScore -- one permanent entry
+//	                                           per play, not just the best; fire-and-forget,
+//	                                           never blocks or fails this response)
 //	GET  /api/daily/leaderboard?date=...    -> ranked standings
 //	POST /api/admin/sign-settlement        -> referee signs {roundId, winners[], amounts[]}
+//	POST /api/admin/pool/create            -> open a round on-chain + register it {entryFee, days}
 //
 // Admin routes require the X-Admin-Token header. Signing requires a configured referee key.
 package api
 
 import (
+	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
+	"fmt"
+	"log"
 	"math/big"
 	"net/http"
+	"sync"
 	"time"
+
+	"math/rand"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/wordbreak/backend/internal/chain"
 	"github.com/wordbreak/backend/internal/dictionary"
 	"github.com/wordbreak/backend/internal/game"
+	"github.com/wordbreak/backend/internal/grid"
 	"github.com/wordbreak/backend/internal/rack"
+	"github.com/wordbreak/backend/internal/room"
 	"github.com/wordbreak/backend/internal/signer"
 	"github.com/wordbreak/backend/internal/store"
 )
@@ -32,28 +47,53 @@ import (
 // Config holds runtime knobs.
 type Config struct {
 	SoloRackSize  int
+	SoloGridSize  int
 	DailyRackSize int
 	AdminToken    string // if empty, admin routes are disabled
 }
 
 // Server is the API dependencies.
 type Server struct {
-	dict   *dictionary.Dictionary
-	store  *store.Store
-	signer *signer.Signer // may be nil if no referee key configured
-	chain  *chain.Client  // may be nil if no RPC configured
-	cfg    Config
+	dict     *dictionary.Dictionary
+	gridTrie *grid.Trie
+	store    *store.Store
+	signer   *signer.Signer // may be nil if no referee key configured
+	chain    *chain.Client  // may be nil if no RPC configured
+	writer   *chain.Writer  // may be nil if no operator key configured
+	rooms    *room.Manager
+	cfg      Config
+
+	// scoreLocks serializes recordScoreOnChain per (roundId, player): the on-chain `attempt`
+	// nonce must exactly match that player's current scoreCount, so two concurrent plays by
+	// the same player racing to read it would otherwise both sign the same attempt and the
+	// loser's write reverts InvalidAttempt and is silently dropped -- confirmed by driving two
+	// overlapping /api/daily/submit calls locally. The Writer's own mutex doesn't cover this:
+	// it only serializes the broadcast, not the scoreCount read that happens before it.
+	scoreLocksMu sync.Mutex
+	scoreLocks   map[string]*sync.Mutex
 }
 
 // New builds a Server. signer and chainCli may be nil (game works; signing/paid daily 503).
-func New(d *dictionary.Dictionary, st *store.Store, sg *signer.Signer, chainCli *chain.Client, cfg Config) *Server {
+func New(d *dictionary.Dictionary, gt *grid.Trie, st *store.Store, sg *signer.Signer, chainCli *chain.Client, cfg Config) *Server {
 	if cfg.SoloRackSize == 0 {
 		cfg.SoloRackSize = 6
+	}
+	if cfg.SoloGridSize == 0 {
+		cfg.SoloGridSize = 4
 	}
 	if cfg.DailyRackSize == 0 {
 		cfg.DailyRackSize = 6
 	}
-	return &Server{dict: d, store: st, signer: sg, chain: chainCli, cfg: cfg}
+	return &Server{dict: d, gridTrie: gt, store: st, signer: sg, chain: chainCli, rooms: room.NewManager(d), cfg: cfg}
+}
+
+// EnableRoomStaking wires the on-chain writer into the multiplayer room manager, turning on
+// staked rooms, and also makes it available to the admin pool-creation endpoint (same operator
+// key opens both staked rooms and daily/multi-day pools). Without calling this, Create rejects
+// any non-zero stake and /api/admin/pool/create is disabled.
+func (s *Server) EnableRoomStaking(w *chain.Writer, chainCli *chain.Client, sg *signer.Signer) {
+	s.writer = w
+	s.rooms.EnableStaking(w, chainCli, sg)
 }
 
 // Routes returns the HTTP handler (Go 1.22+ method+path patterns).
@@ -62,12 +102,22 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /api/referee", s.handleReferee)
 	mux.HandleFunc("GET /api/solo/rack", s.handleSoloRack)
+	mux.HandleFunc("GET /api/solo/grid", s.handleSoloGrid)
 	mux.HandleFunc("POST /api/solo/score", s.handleSoloScore)
 	mux.HandleFunc("GET /api/daily", s.handleDaily)
 	mux.HandleFunc("POST /api/daily/submit", s.handleDailySubmit)
 	mux.HandleFunc("GET /api/daily/leaderboard", s.handleLeaderboard)
 	mux.HandleFunc("POST /api/admin/daily/open", s.handleOpenDaily)
+	mux.HandleFunc("POST /api/admin/pool/create", s.handleCreatePool)
+	mux.HandleFunc("GET /api/admin/pool/list", s.handleListPools)
 	mux.HandleFunc("POST /api/admin/sign-settlement", s.handleSignSettlement)
+	// multiplayer rooms
+	mux.HandleFunc("POST /api/room/create", s.handleRoomCreate)
+	mux.HandleFunc("POST /api/room/join", s.handleRoomJoin)
+	mux.HandleFunc("POST /api/room/start", s.handleRoomStart)
+	mux.HandleFunc("POST /api/room/submit", s.handleRoomSubmit)
+	mux.HandleFunc("GET /api/room/list", s.handleRoomList)
+	mux.HandleFunc("GET /api/room/{code}", s.handleRoomGet)
 	return withCORS(mux)
 }
 
@@ -92,6 +142,20 @@ func (s *Server) handleSoloRack(w http.ResponseWriter, r *http.Request) {
 	// validation. The PAID daily deliberately never does this (see handleDaily).
 	writeJSON(w, http.StatusOK, map[string]any{
 		"letters":   res.Letters,
+		"wordCount": len(res.Words),
+		"words":     res.Words,
+	})
+}
+
+func (s *Server) handleSoloGrid(w http.ResponseWriter, r *http.Request) {
+	size := clampGridSize(intQuery(r, "size", s.cfg.SoloGridSize))
+	res := grid.GenerateSolo(s.gridTrie, size, size, rand.New(rand.NewSource(rand.Int63())))
+	// Same policy as handleSoloRack: solo is free practice, so the answer set ships with
+	// the board for instant, offline-friendly validation.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"letters":   res.Letters,
+		"width":     res.Width,
+		"height":    res.Height,
 		"wordCount": len(res.Words),
 		"words":     res.Words,
 	})
@@ -146,6 +210,7 @@ func (s *Server) handleDailySubmit(w http.ResponseWriter, r *http.Request) {
 	// Fund-safety gate: for a paid round, only score addresses that actually paid in, and
 	// only while entry is still open. Without this, an unpaid address could be scored,
 	// land on the leaderboard, and be signed as a winner — draining the honest pot.
+	var roundID *big.Int
 	if d.Paid {
 		if time.Now().UTC().After(d.EndTime) {
 			writeErr(w, http.StatusForbidden, "today's pool has closed")
@@ -155,7 +220,8 @@ func (s *Server) handleDailySubmit(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusServiceUnavailable, "pool verification unavailable")
 			return
 		}
-		roundID, ok := new(big.Int).SetString(d.RoundID, 10)
+		var ok bool
+		roundID, ok = new(big.Int).SetString(d.RoundID, 10)
 		if !ok {
 			writeErr(w, http.StatusInternalServerError, "bad round id")
 			return
@@ -180,6 +246,15 @@ func (s *Server) handleDailySubmit(w http.ResponseWriter, r *http.Request) {
 		At:      time.Now().UTC(),
 	})
 
+	// Every played game gets its own permanent on-chain record (not just the best), signed by
+	// the referee and logged the moment this play finishes -- independent of and well before
+	// settle(). Fire-and-forget: it runs in the background so a slow or failed chain write
+	// never blocks or fails the player's response; the off-chain leaderboard above is already
+	// the source of truth for gameplay, so a dropped on-chain write costs nothing but history.
+	if d.Paid && s.writer != nil && s.signer != nil {
+		go s.recordScoreOnChain(roundID, req.Address, result.Total)
+	}
+
 	rank := 0
 	for _, e := range d.Leaderboard() {
 		if common.HexToAddress(e.Address) == common.HexToAddress(req.Address) {
@@ -193,6 +268,59 @@ func (s *Server) handleDailySubmit(w http.ResponseWriter, r *http.Request) {
 		"rank":    rank,
 		"result":  result,
 	})
+}
+
+// recordScoreOnChain logs one played game's score on WordBreakPools, independent of and well
+// before settle(). Best-effort and asynchronous by design (see the call site in
+// handleDailySubmit): a slow RPC or a failed transaction here must never turn into a failed
+// response for the player, since the off-chain leaderboard is already durable and correct by
+// the time this runs. Serialized per (round, player) via scoreLock -- see its doc comment --
+// so the scoreCount read and the signed submission stay atomic for a given player even when
+// two of their plays are being recorded concurrently.
+func (s *Server) recordScoreOnChain(roundID *big.Int, address string, score int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	player := common.HexToAddress(address)
+
+	lock := s.scoreLock(roundID, player)
+	lock.Lock()
+	defer lock.Unlock()
+
+	attempt, err := s.chain.ScoreCount(ctx, roundID, player)
+	if err != nil {
+		log.Printf("recordScore: reading scoreCount for %s round %s: %v", address, roundID, err)
+		return
+	}
+	scoreBig := big.NewInt(int64(score))
+	sig, err := s.signer.SignScore(roundID, player, scoreBig, attempt)
+	if err != nil {
+		log.Printf("recordScore: signing for %s round %s: %v", address, roundID, err)
+		return
+	}
+	if err := s.writer.RecordScore(ctx, roundID, player, scoreBig, attempt, sig); err != nil {
+		log.Printf("recordScore: submitting for %s round %s: %v", address, roundID, err)
+	}
+}
+
+// scoreLock returns the mutex for a given (roundId, player), creating it on first use. Locks
+// are never removed -- one per distinct player-round pairing that has ever recorded a score --
+// which is a fine tradeoff at this scale; revisit only if that ever shows up as real memory
+// pressure.
+func (s *Server) scoreLock(roundID *big.Int, player common.Address) *sync.Mutex {
+	key := roundID.String() + ":" + player.Hex()
+
+	s.scoreLocksMu.Lock()
+	defer s.scoreLocksMu.Unlock()
+	if s.scoreLocks == nil {
+		s.scoreLocks = make(map[string]*sync.Mutex)
+	}
+	m, ok := s.scoreLocks[key]
+	if !ok {
+		m = &sync.Mutex{}
+		s.scoreLocks[key] = m
+	}
+	return m
 }
 
 func (s *Server) handleLeaderboard(w http.ResponseWriter, r *http.Request) {
@@ -245,6 +373,110 @@ func (s *Server) handleOpenDaily(w http.ResponseWriter, r *http.Request) {
 		"endTime": d.EndTime.Unix(),
 		"paid":    true,
 	})
+}
+
+// handleCreatePool does what used to take a forge script (CreateRound.s.sol) plus a loop of
+// /api/admin/daily/open calls, in one request: opens a round on-chain with the operator wallet,
+// then registers it with the backend for every day in [today, today+days). A pool is always
+// visible starting today; Days controls how long it stays open (1 = classic single-day daily).
+func (s *Server) handleCreatePool(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOK(w, r) {
+		return
+	}
+	var req struct {
+		EntryFee string `json:"entryFee"` // wei, decimal string
+		Days     int    `json:"days"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	entryFee, ok := new(big.Int).SetString(req.EntryFee, 10)
+	if !ok || entryFee.Sign() <= 0 {
+		writeErr(w, http.StatusBadRequest, "entryFee must be a positive wei amount (the contract rejects a zero entry fee)")
+		return
+	}
+	if req.Days < 1 || req.Days > 90 {
+		writeErr(w, http.StatusBadRequest, "days must be between 1 and 90")
+		return
+	}
+	// Cheap request-shape validation runs before this, so a malformed request always gets a
+	// clear 400 regardless of server config -- only a well-formed request reaches this check.
+	if s.writer == nil || s.chain == nil {
+		writeErr(w, http.StatusServiceUnavailable, "on-chain pool creation isn't configured")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	roundID, err := freshRoundID(ctx, s.chain)
+	cancel()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not prepare a round id: "+err.Error())
+		return
+	}
+
+	now := time.Now().UTC()
+	endTime := now.AddDate(0, 0, req.Days)
+
+	ctx, cancel = context.WithTimeout(r.Context(), 30*time.Second)
+	err = s.writer.CreateRound(ctx, roundID, entryFee, uint64(endTime.Unix()))
+	cancel()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not open the round on-chain: "+err.Error())
+		return
+	}
+
+	dateKeys := make([]string, req.Days)
+	for i := 0; i < req.Days; i++ {
+		dateKey := now.AddDate(0, 0, i).Format("2006-01-02")
+		letters := rack.GenerateDaily(s.dict, dateKey, s.cfg.DailyRackSize).Letters
+		s.store.OpenPaidDaily(dateKey, roundID.String(), endTime, letters)
+		dateKeys[i] = dateKey
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"roundId":  roundID.String(),
+		"entryFee": entryFee.String(),
+		"endTime":  endTime.Unix(),
+		"dateKeys": dateKeys,
+	})
+}
+
+// freshRoundID picks a large random on-chain round id, retrying on the (extremely unlikely)
+// chance it collides with an existing round. Mirrors internal/room's identically-named helper,
+// which can't be reused directly since it takes a *chain.Client from a different package.
+func freshRoundID(ctx context.Context, reader *chain.Client) (*big.Int, error) {
+	for i := 0; i < 5; i++ {
+		buf := make([]byte, 8)
+		if _, err := cryptorand.Read(buf); err != nil {
+			return nil, err
+		}
+		n := new(big.Int).SetBytes(buf)
+		n.Rsh(n, 1)
+		exists, err := reader.RoundExists(ctx, n)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return n, nil
+		}
+	}
+	return nil, fmt.Errorf("could not find a free round id")
+}
+
+// handleListPools returns every registered paid round, so the admin UI can show what's already
+// open before creating another one.
+func (s *Server) handleListPools(w http.ResponseWriter, r *http.Request) {
+	if !s.adminOK(w, r) {
+		return
+	}
+	pools := s.store.ListPaidDailies()
+	out := make([]map[string]any, len(pools))
+	for i, p := range pools {
+		out[i] = map[string]any{
+			"dateKey": p.DateKey, "letters": p.Letters, "roundId": p.RoundID, "endTime": p.EndTime.Unix(),
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pools": out})
 }
 
 func (s *Server) handleSignSettlement(w http.ResponseWriter, r *http.Request) {
@@ -317,6 +549,107 @@ func (s *Server) handleSignSettlement(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// --- multiplayer rooms ---
+
+func (s *Server) handleRoomCreate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PlayerId string `json:"playerId"`
+		Name     string `json:"name"`
+		Public   bool   `json:"public"`
+		Stake    string `json:"stake"` // decimal wei string; "" or "0" = free
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.PlayerId == "" {
+		writeErr(w, http.StatusBadRequest, "playerId required")
+		return
+	}
+	opts := room.CreateOpts{Public: req.Public}
+	if req.Stake != "" && req.Stake != "0" {
+		amt, ok := new(big.Int).SetString(req.Stake, 10)
+		if !ok || amt.Sign() <= 0 {
+			writeErr(w, http.StatusBadRequest, "invalid stake amount")
+			return
+		}
+		opts.Stake = amt
+	}
+	view, err := s.rooms.Create(req.PlayerId, req.Name, opts)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) handleRoomList(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"rooms": s.rooms.List()})
+}
+
+func (s *Server) handleRoomJoin(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Code     string `json:"code"`
+		PlayerId string `json:"playerId"`
+		Name     string `json:"name"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if req.PlayerId == "" || req.Code == "" {
+		writeErr(w, http.StatusBadRequest, "code and playerId required")
+		return
+	}
+	view, err := s.rooms.Join(req.Code, req.PlayerId, req.Name)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) handleRoomStart(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Code     string `json:"code"`
+		PlayerId string `json:"playerId"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	view, err := s.rooms.Start(req.Code, req.PlayerId)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) handleRoomSubmit(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Code     string `json:"code"`
+		PlayerId string `json:"playerId"`
+		Word     string `json:"word"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	accepted, pts, view, err := s.rooms.Submit(req.Code, req.PlayerId, req.Word)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": accepted, "points": pts, "room": view})
+}
+
+func (s *Server) handleRoomGet(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+	view, ok := s.rooms.Get(code, r.URL.Query().Get("you"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "room not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
 // --- helpers ---
 
 func (s *Server) adminOK(w http.ResponseWriter, r *http.Request) bool {
@@ -339,6 +672,16 @@ func clampSize(n int) int {
 	}
 	if n > 8 {
 		return 8
+	}
+	return n
+}
+
+func clampGridSize(n int) int {
+	if n < 4 {
+		return 4
+	}
+	if n > 6 {
+		return 6
 	}
 	return n
 }

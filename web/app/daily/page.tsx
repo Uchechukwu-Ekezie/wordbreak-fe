@@ -5,7 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits } from "viem";
 import { API, POOLS_ADDRESS, CUSD_ADDRESS, isConfigured } from "@/lib/config";
 import { POOLS_ABI, ERC20_ABI } from "@/lib/contracts";
-import { connect, hasWallet, isMiniPay, publicClient, sendWrite } from "@/lib/wallet";
+import { publicClient, sendWrite } from "@/lib/wallet";
+import { celoNeededForCusd, mentoAvailable, swapCeloForCusd } from "@/lib/mento";
+import { useWallet } from "../wallet-provider";
 
 const PLAY_SECONDS = 90;
 const WALL_BRICKS = 24;
@@ -38,12 +40,13 @@ type LB = { rank: number; address: string; score: number; words: number }[];
 type View = "loading" | "no-pool" | "lobby" | "playing" | "done";
 
 export default function Daily() {
+  const { account: address, name, connect: onConnect } = useWallet();
   const [view, setView] = useState<View>("loading");
   const [info, setInfo] = useState<DailyInfo | null>(null);
-  const [address, setAddress] = useState<`0x${string}` | null>(null);
   const [round, setRound] = useState<Round | null>(null);
   const [entered, setEntered] = useState(false);
   const [claimable, setClaimable] = useState<bigint>(0n);
+  const [myScores, setMyScores] = useState<bigint[]>([]);
   const [leaderboard, setLeaderboard] = useState<LB>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -73,14 +76,19 @@ export default function Daily() {
 
   const refreshChain = useCallback(
     async (addr: `0x${string}`, rId: bigint) => {
-      const [r, ent, cl] = await Promise.all([
+      const [r, ent, cl, scores] = await Promise.all([
         publicClient.readContract({ address: POOLS_ADDRESS, abi: POOLS_ABI, functionName: "getRound", args: [rId] }),
         publicClient.readContract({ address: POOLS_ADDRESS, abi: POOLS_ABI, functionName: "hasEntered", args: [rId, addr] }),
         publicClient.readContract({ address: POOLS_ADDRESS, abi: POOLS_ABI, functionName: "claimable", args: [addr] }),
+        // Every game this address has played this round, on-chain and referee-signed --
+        // recorded moments after each play finishes, independent of settlement. Best-effort:
+        // an empty/stale result here never blocks anything, it's a historical display only.
+        publicClient.readContract({ address: POOLS_ADDRESS, abi: POOLS_ABI, functionName: "getScores", args: [rId, addr] }),
       ]);
       setRound(r as Round);
       setEntered(ent as boolean);
       setClaimable(cl as bigint);
+      setMyScores(scores as bigint[]);
     },
     [],
   );
@@ -98,12 +106,6 @@ export default function Daily() {
           return;
         }
         fetchLeaderboard();
-        // MiniPay auto-connects; otherwise wait for the Connect button.
-        if (isMiniPay()) {
-          const addr = await connect();
-          setAddress(addr);
-          await refreshChain(addr, BigInt(d.roundId!));
-        }
         setView("lobby");
       } catch {
         setError("Couldn't load today's pool.");
@@ -113,21 +115,34 @@ export default function Daily() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const onConnect = async () => {
-    setError(null);
-    try {
-      const addr = await connect();
-      setAddress(addr);
-      if (roundId) await refreshChain(addr, roundId);
-    } catch (e) {
-      setError(errMsg(e));
-    }
-  };
+  // Load on-chain state whenever the wallet (from context) or the round becomes available.
+  useEffect(() => {
+    if (address && info?.roundId) refreshChain(address, BigInt(info.roundId));
+  }, [address, info?.roundId, refreshChain]);
 
   const enterPool = async () => {
     if (!address || !round || !roundId) return;
     setError(null);
     try {
+      // Don't require players to already hold cUSD — top up the shortfall from their CELO via
+      // Mento first. A 3% buffer on the CELO side absorbs normal price movement between the
+      // quote and the swap confirming; amountOutMin still guarantees at least the shortfall.
+      if (mentoAvailable()) {
+        const cusdBalance = (await publicClient.readContract({
+          address: CUSD_ADDRESS, abi: ERC20_ABI, functionName: "balanceOf", args: [address],
+        })) as bigint;
+        if (cusdBalance < round.entryFee) {
+          const shortfall = round.entryFee - cusdBalance;
+          setBusy("Getting cUSD…");
+          const celoQuote = await celoNeededForCusd(shortfall);
+          const celoIn = (celoQuote * 103n) / 100n;
+          const celoBalance = await publicClient.getBalance({ address });
+          if (celoBalance < celoIn) throw new Error("Not enough CELO to cover the entry fee.");
+          const sh = await swapCeloForCusd(address, celoIn, shortfall);
+          await publicClient.waitForTransactionReceipt({ hash: sh });
+        }
+      }
+
       // Approve only if needed.
       const allowance = (await publicClient.readContract({
         address: CUSD_ADDRESS, abi: ERC20_ABI, functionName: "allowance", args: [address, POOLS_ADDRESS],
@@ -147,6 +162,7 @@ export default function Daily() {
       await publicClient.waitForTransactionReceipt({ hash: eh });
       await refreshChain(address, roundId);
     } catch (e) {
+      console.error("enterPool failed:", e);
       setError(errMsg(e));
     } finally {
       setBusy(null);
@@ -164,6 +180,7 @@ export default function Daily() {
       await publicClient.waitForTransactionReceipt({ hash: h });
       await refreshChain(address, roundId);
     } catch (e) {
+      console.error("claim failed:", e);
       setError(errMsg(e));
     } finally {
       setBusy(null);
@@ -280,12 +297,10 @@ export default function Daily() {
         </section>
 
         {!address ? (
-          <button className="btn primary" onClick={onConnect}>
-            {hasWallet() ? "Connect wallet" : "Open in MiniPay to play"}
-          </button>
+          <button className="btn primary" onClick={onConnect}>Connect wallet</button>
         ) : (
           <>
-            <div className="addr mono">{short(address)}{entered ? " · entered ✓" : ""}</div>
+            <div className="addr mono">{name || short(address)}{entered ? " · entered ✓" : ""}</div>
             {busy && <div className="tx-note">{busy}</div>}
             {!entered && roundOpen && (
               <button className="btn primary" onClick={enterPool} disabled={!!busy}>
@@ -305,7 +320,8 @@ export default function Daily() {
         )}
 
         {error && <div className="tx-note err">{error}</div>}
-        <Leaderboard rows={leaderboard} me={address} />
+        <OnChainPlays scores={myScores} />
+        <Leaderboard rows={leaderboard} me={address} myName={name} />
       </main>
     );
   }
@@ -361,7 +377,8 @@ export default function Daily() {
           <div className="big">{score}</div>
           <div className="big-lbl">your score</div>
           {claimable > 0n && <button className="btn win" onClick={claim} disabled={!!busy}>Claim {cusd(claimable)}</button>}
-          <Leaderboard rows={leaderboard} me={address} />
+          <OnChainPlays scores={myScores} />
+          <Leaderboard rows={leaderboard} me={address} myName={name} />
           <button className="btn" style={{ marginTop: 14 }} onClick={() => setView("lobby")}>Back to pool</button>
         </div>
       )}
@@ -387,17 +404,43 @@ function Header({ timeLeft, showTimer }: { timeLeft: number; showTimer: boolean 
   );
 }
 
-function Leaderboard({ rows, me }: { rows: LB; me: `0x${string}` | null }) {
+// Every game recorded on WordBreakPools for this address/round, in play order -- a permanent,
+// referee-signed history (not just your best), independent of the off-chain leaderboard above.
+function OnChainPlays({ scores }: { scores: bigint[] }) {
+  if (!scores.length) return null;
+  const best = scores.reduce((m, s) => (s > m ? s : m), 0n);
+  return (
+    <div className="lb" style={{ marginTop: 10 }}>
+      <div className="pk" style={{ marginBottom: 6 }}>
+        your plays today (on-chain) · best {best.toString()}
+      </div>
+      <div className="found" style={{ justifyContent: "flex-start" }}>
+        {scores.map((s, i) => (
+          <span className="chip" key={i}>
+            #{i + 1} <span className="pts">{s.toString()}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Leaderboard(
+  { rows, me, myName }: { rows: LB; me: `0x${string}` | null; myName?: string },
+) {
   if (!rows.length) return <div className="lb-empty">No scores yet — be first.</div>;
   return (
     <div className="lb">
-      {rows.slice(0, 10).map((r) => (
-        <div className={`lb-row ${me && r.address.toLowerCase() === me.toLowerCase() ? "me" : ""}`} key={r.address}>
-          <span className="lb-rank mono">{r.rank}</span>
-          <span className="lb-addr mono">{short(r.address as `0x${string}`)}</span>
-          <span className="lb-score mono">{r.score}</span>
-        </div>
-      ))}
+      {rows.slice(0, 10).map((r) => {
+        const isMe = !!me && r.address.toLowerCase() === me.toLowerCase();
+        return (
+          <div className={`lb-row ${isMe ? "me" : ""}`} key={r.address}>
+            <span className="lb-rank mono">{r.rank}</span>
+            <span className="lb-addr mono">{isMe && myName ? myName : short(r.address as `0x${string}`)}</span>
+            <span className="lb-score mono">{r.score}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

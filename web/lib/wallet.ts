@@ -1,58 +1,17 @@
-// Wallet + chain plumbing. Plain viem over window.ethereum — MiniPay injects it and
-// auto-connects; no wagmi/connector libraries needed (per Celo's MiniPay guide).
+// Wallet + chain plumbing. Privy (+ a plain wagmi config, see lib/wagmiConfig.ts) owns wallet
+// connection — MiniPay/injected providers, WalletConnect QR pairing, and email/social login
+// all go through one unified modal (see app/providers.tsx, app/wallet-provider.tsx). This file
+// exposes what the game needs beyond that: a read-only viem publicClient, and sendWrite() which
+// sends a contract write through wagmi's active connector.
 
-import {
-  createPublicClient,
-  createWalletClient,
-  custom,
-  http,
-  type Abi,
-  type Chain,
-  type PublicClient,
-  type WalletClient,
-} from "viem";
-import { celo } from "viem/chains";
+import { createPublicClient, http, type Abi, type PublicClient } from "viem";
+import { writeContract } from "@wagmi/core";
 import { CHAIN_ID, RPC_URL, FEE_CURRENCY } from "./config";
+import { chain, wagmiConfig } from "./wagmiConfig";
 
-// Use viem's built-in celo chain on mainnet (it carries the CIP-64 fee-currency formatter);
-// a plain chain object is enough for testnet where gas is paid in CELO.
-export const chain: Chain =
-  CHAIN_ID === 42220
-    ? celo
-    : {
-        id: CHAIN_ID,
-        name: "Celo",
-        nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
-        rpcUrls: { default: { http: [RPC_URL] } },
-      };
+export { chain };
 
 export const publicClient: PublicClient = createPublicClient({ chain, transport: http(RPC_URL) });
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-function ethereum(): any {
-  return typeof window !== "undefined" ? (window as any).ethereum : undefined;
-}
-
-export function isMiniPay(): boolean {
-  return Boolean(ethereum()?.isMiniPay);
-}
-
-export function hasWallet(): boolean {
-  return Boolean(ethereum());
-}
-
-export function walletClient(): WalletClient {
-  const eth = ethereum();
-  if (!eth) throw new Error("No wallet found");
-  return createWalletClient({ chain, transport: custom(eth) });
-}
-
-export async function connect(): Promise<`0x${string}`> {
-  const eth = ethereum();
-  if (!eth) throw new Error("No wallet. Open this in MiniPay, or install a Celo wallet.");
-  const accounts: string[] = await eth.request({ method: "eth_requestAccounts" });
-  return accounts[0] as `0x${string}`;
-}
 
 // Gas-in-stablecoin only makes sense on mainnet MiniPay; undefined elsewhere.
 export function feeCurrencyOpt(): { feeCurrency?: `0x${string}` } {
@@ -60,12 +19,15 @@ export function feeCurrencyOpt(): { feeCurrency?: `0x${string}` } {
   return {};
 }
 
-// One place to send a contract write. `feeCurrency` (Celo CIP-64) isn't in viem's generic
-// writeContract type, so we cast through here rather than at every call site.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// One place to send a contract write. Goes through wagmi's own `writeContract` action (not a
+// raw viem WalletClient) — it resolves the client via the active connector and only asserts
+// the current chain when a chainId is explicitly passed; omitting chainId here avoids that
+// assertion entirely. `feeCurrency` (Celo CIP-64) isn't in wagmi's generic writeContract type,
+// so we cast through.
 export async function sendWrite(
   account: `0x${string}`,
   params: { address: `0x${string}`; abi: Abi; functionName: string; args?: readonly unknown[] },
 ): Promise<`0x${string}`> {
-  const wc = walletClient();
-  return wc.writeContract({ account, chain, ...params, ...feeCurrencyOpt() } as any) as Promise<`0x${string}`>;
+  return writeContract(wagmiConfig, { account, ...params, ...feeCurrencyOpt() } as any) as Promise<`0x${string}`>;
 }

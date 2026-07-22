@@ -3,8 +3,9 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 import {WordBreakPools} from "../src/WordBreakPools.sol";
+import {DeployProxy} from "./lib/DeployProxy.sol";
 
-/// @notice Deploys WordBreakPools. Configure via env vars:
+/// @notice Deploys WordBreakPools behind a UUPS proxy. Configure via env vars:
 ///   TOKEN       - stablecoin address (cUSD). Defaults per chain if unset.
 ///   REFEREE     - backend signer address (required)
 ///   TREASURY    - rake recipient (required)
@@ -33,10 +34,13 @@ contract Deploy is Script {
         require(token != address(0), "TOKEN unset and no default for this chain");
 
         vm.startBroadcast(deployerPk);
-        pool = new WordBreakPools(token, referee, treasury, rakeBps, refundDelay, owner);
+        address implementation;
+        (pool, implementation) =
+            DeployProxy.deploy(token, referee, treasury, rakeBps, refundDelay, owner);
         vm.stopBroadcast();
 
-        console.log("WordBreakPools:", address(pool));
+        console.log("WordBreakPools (proxy - USE THIS ADDRESS):", address(pool));
+        console.log("  implementation:", implementation);
         console.log("  token:   ", token);
         console.log("  referee: ", referee);
         console.log("  treasury:", treasury);

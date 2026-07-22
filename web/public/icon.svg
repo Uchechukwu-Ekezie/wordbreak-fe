@@ -1,0 +1,31 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@700&amp;display=swap');</style>
+    <radialGradient id="bg" cx="50%" cy="18%" r="90%">
+      <stop offset="0%" stop-color="#3b2b86"/>
+      <stop offset="45%" stop-color="#1b1442"/>
+      <stop offset="100%" stop-color="#0f0a24"/>
+    </radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#ded3ff"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9b6bff" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#9b6bff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+  <circle cx="256" cy="150" r="180" fill="url(#glow)"/>
+
+  <!-- keycap shadow -->
+  <rect x="146" y="196" width="220" height="220" rx="46" fill="#2b2159"/>
+  <!-- keycap face -->
+  <rect x="146" y="176" width="220" height="220" rx="46" fill="url(#tile)"/>
+  <rect x="146" y="176" width="220" height="46" rx="23" fill="#ffffff" opacity="0.55"/>
+
+  <text x="256" y="330" text-anchor="middle"
+        font-family="Fredoka, 'Baloo 2', 'Segoe UI Rounded', system-ui, sans-serif"
+        font-weight="700" font-size="168" fill="#16112e">W</text>
+</svg>

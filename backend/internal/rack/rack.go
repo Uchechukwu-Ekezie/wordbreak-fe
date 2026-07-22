@@ -27,15 +27,22 @@ type Result struct {
 	Words   []string // every valid word buildable from Letters (>= MinWordLen)
 }
 
-// minWords is the difficulty floor: a rack must yield at least this many words.
+// minWords is the difficulty floor: a rack must yield at least this many words. Small racks
+// (3–4 letters, the early levels) can't have many, so the floor scales with size.
 func minWords(size int) int {
 	switch {
-	case size <= 5:
-		return 8
+	case size <= 3:
+		return 2
+	case size == 4:
+		return 4
+	case size == 5:
+		return 6
 	case size == 6:
-		return 12
+		return 10
+	case size == 7:
+		return 14
 	default:
-		return 16
+		return 18
 	}
 }
 

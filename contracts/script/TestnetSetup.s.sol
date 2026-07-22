@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Script, console} from "forge-std/Script.sol";
 import {WordBreakPools} from "../src/WordBreakPools.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
+import {DeployProxy} from "./lib/DeployProxy.sol";
 
 /// @notice TESTNET (Celo Sepolia): deploys a mintable mock cUSD + WordBreakPools and opens a
 ///         round in one shot. Uses a mock token so test players can be funded freely (real
@@ -24,8 +25,8 @@ contract TestnetSetup is Script {
         vm.startBroadcast(pk);
         MockERC20 token = new MockERC20();
         token.mint(deployer, 1000 ether); // test cUSD to fund players
-        WordBreakPools pool =
-            new WordBreakPools(address(token), referee, treasury, rakeBps, refundDelay, deployer);
+        (WordBreakPools pool,) =
+            DeployProxy.deploy(address(token), referee, treasury, rakeBps, refundDelay, deployer);
         pool.createRound(roundId, entryFee, endTime);
         vm.stopBroadcast();
 
