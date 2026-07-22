@@ -403,6 +403,11 @@ export default function Game() {
             <span className="mode-text"><b>Daily Pool</b><i>Win cUSD</i></span>
             <span className="mode-go">→</span>
           </Link>
+          <Link href="/arena" className="mode-card">
+            <span className="mode-emoji">☠️</span>
+            <span className="mode-text"><b>Battle Royale</b><i>Last one standing wins</i></span>
+            <span className="mode-go">→</span>
+          </Link>
         </div>
         {tabs("home")}
       </main>
