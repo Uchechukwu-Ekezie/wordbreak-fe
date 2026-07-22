@@ -9,6 +9,13 @@ export const RPC_URL =
 export const POOLS_ADDRESS = (process.env.NEXT_PUBLIC_POOLS_ADDRESS || "") as `0x${string}`;
 export const CUSD_ADDRESS = (process.env.NEXT_PUBLIC_CUSD_ADDRESS || "") as `0x${string}`;
 
+// WordBreakArena — no backend, so this is the only config the on-chain battle-royale game
+// needs. Its entry token is read live from the contract's own immutable `token()` rather than
+// hardcoded here, since a given deployment could use any ERC-20 (this session's Sepolia
+// deployment uses native CELO's ERC-20 wrapper, not cUSD).
+export const ARENA_ADDRESS = (process.env.NEXT_PUBLIC_ARENA_ADDRESS || "") as `0x${string}`;
+export const isArenaConfigured = () => Boolean(ARENA_ADDRESS);
+
 // Optional: pay gas in a stablecoin (Celo CIP-64). Only used on mainnet (chainId 42220),
 // where MiniPay expects it. On testnet, leave unset and pay gas in CELO.
 export const FEE_CURRENCY = (process.env.NEXT_PUBLIC_FEE_CURRENCY || "") as `0x${string}` | "";

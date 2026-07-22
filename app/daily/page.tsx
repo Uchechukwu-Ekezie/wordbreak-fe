@@ -46,6 +46,7 @@ export default function Daily() {
   const [round, setRound] = useState<Round | null>(null);
   const [entered, setEntered] = useState(false);
   const [claimable, setClaimable] = useState<bigint>(0n);
+  const [myScores, setMyScores] = useState<bigint[]>([]);
   const [leaderboard, setLeaderboard] = useState<LB>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -75,14 +76,19 @@ export default function Daily() {
 
   const refreshChain = useCallback(
     async (addr: `0x${string}`, rId: bigint) => {
-      const [r, ent, cl] = await Promise.all([
+      const [r, ent, cl, scores] = await Promise.all([
         publicClient.readContract({ address: POOLS_ADDRESS, abi: POOLS_ABI, functionName: "getRound", args: [rId] }),
         publicClient.readContract({ address: POOLS_ADDRESS, abi: POOLS_ABI, functionName: "hasEntered", args: [rId, addr] }),
         publicClient.readContract({ address: POOLS_ADDRESS, abi: POOLS_ABI, functionName: "claimable", args: [addr] }),
+        // Every game this address has played this round, on-chain and referee-signed --
+        // recorded moments after each play finishes, independent of settlement. Best-effort:
+        // an empty/stale result here never blocks anything, it's a historical display only.
+        publicClient.readContract({ address: POOLS_ADDRESS, abi: POOLS_ABI, functionName: "getScores", args: [rId, addr] }),
       ]);
       setRound(r as Round);
       setEntered(ent as boolean);
       setClaimable(cl as bigint);
+      setMyScores(scores as bigint[]);
     },
     [],
   );
@@ -314,6 +320,7 @@ export default function Daily() {
         )}
 
         {error && <div className="tx-note err">{error}</div>}
+        <OnChainPlays scores={myScores} />
         <Leaderboard rows={leaderboard} me={address} myName={name} />
       </main>
     );
@@ -370,6 +377,7 @@ export default function Daily() {
           <div className="big">{score}</div>
           <div className="big-lbl">your score</div>
           {claimable > 0n && <button className="btn win" onClick={claim} disabled={!!busy}>Claim {cusd(claimable)}</button>}
+          <OnChainPlays scores={myScores} />
           <Leaderboard rows={leaderboard} me={address} myName={name} />
           <button className="btn" style={{ marginTop: 14 }} onClick={() => setView("lobby")}>Back to pool</button>
         </div>
@@ -393,6 +401,27 @@ function Header({ timeLeft, showTimer }: { timeLeft: number; showTimer: boolean 
         <div className={`timer ${timeLeft <= 10 ? "low" : ""}`}><span className="lbl">TIME</span>{mm}:{ss}</div>
       )}
     </header>
+  );
+}
+
+// Every game recorded on WordBreakPools for this address/round, in play order -- a permanent,
+// referee-signed history (not just your best), independent of the off-chain leaderboard above.
+function OnChainPlays({ scores }: { scores: bigint[] }) {
+  if (!scores.length) return null;
+  const best = scores.reduce((m, s) => (s > m ? s : m), 0n);
+  return (
+    <div className="lb" style={{ marginTop: 10 }}>
+      <div className="pk" style={{ marginBottom: 6 }}>
+        your plays today (on-chain) · best {best.toString()}
+      </div>
+      <div className="found" style={{ justifyContent: "flex-start" }}>
+        {scores.map((s, i) => (
+          <span className="chip" key={i}>
+            #{i + 1} <span className="pts">{s.toString()}</span>
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
