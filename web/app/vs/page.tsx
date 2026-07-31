@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits, parseUnits } from "viem";
 import { API, POOLS_ADDRESS, CUSD_ADDRESS, isConfigured } from "@/lib/config";
@@ -67,6 +68,7 @@ function loadSession(): { code: string; pid: string } | null {
 
 export default function Versus() {
   const { account, name: profileName, connect: doConnect } = useWallet();
+  const router = useRouter();
   const [pid, setPid] = useState("");
   const [room, setRoom] = useState<RoomView | null>(null);
   const [restoring, setRestoring] = useState(true);
@@ -245,7 +247,7 @@ export default function Versus() {
       <main className="shell">
         <header className="top">
           <div className="wordmark display">WORD<span className="brk">BREAK</span><span className="dot">.</span></div>
-          <Link href="/" className="about-link">HOME</Link>
+          <button className="about-link" onClick={() => router.back()}>BACK</button>
         </header>
         <div className="vs-entry-scroll">
           <div className="gate-inner" style={{ padding: "8px 0" }}>
@@ -397,7 +399,7 @@ export default function Versus() {
           {error && <p className="tx-note err">{error}</p>}
 
           <button className="btn primary gate-btn" style={{ marginTop: 12 }} onClick={leave}>Play again</button>
-          <Link href="/" className="daily-link">← Home</Link>
+          <button className="daily-link" onClick={() => router.back()}>← Back</button>
         </div>
       ) : (
         <div className="stage">
