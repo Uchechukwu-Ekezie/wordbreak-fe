@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatUnits } from "viem";
 import { API, POOLS_ADDRESS, CUSD_ADDRESS, isConfigured } from "@/lib/config";
@@ -41,6 +42,7 @@ type View = "loading" | "no-pool" | "lobby" | "playing" | "done";
 
 export default function Daily() {
   const { account: address, name, connect: onConnect } = useWallet();
+  const router = useRouter();
   const [view, setView] = useState<View>("loading");
   const [info, setInfo] = useState<DailyInfo | null>(null);
   const [round, setRound] = useState<Round | null>(null);
@@ -270,9 +272,9 @@ export default function Daily() {
           <p className="tag">
             {error || "There isn't an open daily pool right now. Come back later — or sharpen up in solo."}
           </p>
-          <Link href="/" className="btn" style={{ display: "block", textDecoration: "none" }}>
-            Play solo
-          </Link>
+          <button className="btn" style={{ display: "block" }} onClick={() => router.back()}>
+            ← Back
+          </button>
         </div>
       </main>
     );
@@ -282,7 +284,7 @@ export default function Daily() {
     return (
       <main className="shell">
         <Header timeLeft={0} showTimer={false} />
-        <Link href="/" className="backlink">← Solo</Link>
+        <button className="backlink" onClick={() => router.back()}>← Back</button>
 
         <section className="pool-card">
           <div className="pool-top">
