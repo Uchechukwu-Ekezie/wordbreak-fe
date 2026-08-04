@@ -152,9 +152,9 @@ export default function ArenaLobby() {
         <div className="card" style={{ margin: "auto", boxShadow: "0 10px 0 var(--red, #ff5c5c)" }}>
           <h1 style={{ fontSize: 26 }}>Not configured</h1>
           <p className="tag">Battle Royale isn&apos;t set up on this build yet.</p>
-          <Link href="/" className="btn" style={{ display: "block", textDecoration: "none", marginTop: 12 }}>
-            Back home
-          </Link>
+          <button className="btn" style={{ display: "block", marginTop: 12 }} onClick={() => router.back()}>
+            ← Back
+          </button>
         </div>
       </main>
     );
@@ -235,10 +235,11 @@ export default function ArenaLobby() {
 }
 
 function Header() {
+  const router = useRouter();
   return (
     <header className="top">
       <div className="wordmark display">WORD<span className="brk">BREAK</span><span className="dot">.</span></div>
-      <Link href="/" className="about-link">HOME</Link>
+      <button className="about-link" onClick={() => router.back()}>BACK</button>
     </header>
   );
 }
