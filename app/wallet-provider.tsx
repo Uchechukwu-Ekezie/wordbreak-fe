@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { useLogin, useLogout, usePrivy } from "@privy-io/react-auth";
 import { useAccount, useDisconnect as useWagmiDisconnect } from "wagmi";
+import { PRIVY_APP_ID } from "@/lib/config";
 
 type WalletState = {
   account: `0x${string}` | null;
@@ -22,7 +23,8 @@ export function useWallet(): WalletState {
   return v;
 }
 
-export function WalletProvider({ children }: { children: React.ReactNode }) {
+// Full wallet provider — requires Privy + Wagmi in the tree.
+function WalletProviderInner({ children }: { children: React.ReactNode }) {
   const { ready } = usePrivy();
   const { address, isConnected } = useAccount();
   const { disconnect: wagmiDisconnect } = useWagmiDisconnect();
@@ -32,8 +34,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
 
-  // Privy's login() doesn't return a promise that resolves on completion -- it just opens
-  // the modal, and completion/cancellation come back later via these callbacks.
   const { login } = useLogin({
     onComplete: () => setConnecting(false),
     onError: (e) => {
@@ -51,8 +51,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined") localStorage.setItem("wb_name", t);
   }, []);
 
-  // Privy's own modal offers MiniPay/browser wallets, WalletConnect QR pairing, and
-  // email/social login all in one place — connect() just opens it.
   const connect = useCallback(async () => {
     if (!ready) return;
     setError(null);
@@ -60,9 +58,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     login();
   }, [ready, login]);
 
-  // Logs out of Privy (clears its session/auth tokens) and disconnects wagmi's active
-  // connector -- an external wallet (MetaMask, MiniPay) stays connected in wagmi otherwise,
-  // since Privy's own logout only tears down its own session.
   const disconnect = useCallback(() => {
     void logout();
     wagmiDisconnect();
@@ -72,7 +67,6 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     if (typeof window !== "undefined") setNameState(localStorage.getItem("wb_name") || "");
   }, []);
 
-  // First time a wallet connects without a name → simple registration.
   const needsName = Boolean(account) && !name;
 
   return (
@@ -101,4 +95,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       )}
     </Ctx.Provider>
   );
+}
+
+// Stub provider when Privy is not configured — app renders but wallet features are inert.
+function WalletProviderStub({ children }: { children: React.ReactNode }) {
+  return (
+    <Ctx.Provider value={{ account: null, name: "", setName: () => {}, connecting: false, error: null, connect: async () => {}, disconnect: () => {} }}>
+      {children}
+    </Ctx.Provider>
+  );
+}
+
+export function WalletProvider({ children }: { children: React.ReactNode }) {
+  if (!PRIVY_APP_ID) return <WalletProviderStub>{children}</WalletProviderStub>;
+  return <WalletProviderInner>{children}</WalletProviderInner>;
 }

@@ -12,9 +12,10 @@ import ActiveWalletSync from "./active-wallet-sync";
 const queryClient = new QueryClient();
 
 export function Providers({ children }: { children: ReactNode }) {
+  if (!PRIVY_APP_ID) return <>{children}</>;
   return (
     <PrivyProvider
-      appId={PRIVY_APP_ID || "placeholder"}
+      appId={PRIVY_APP_ID}
       config={{
         appearance: { theme: "dark", showWalletLoginFirst: false },
         loginMethods: ["wallet", "email", "google", "twitter", "discord"],
@@ -26,8 +27,8 @@ export function Providers({ children }: { children: ReactNode }) {
     >
       <QueryClientProvider client={queryClient}>
         <WagmiProvider config={wagmiConfig}>
-          {PRIVY_APP_ID && <MiniPayConnector />}
-          {PRIVY_APP_ID && <ActiveWalletSync />}
+          <MiniPayConnector />
+          <ActiveWalletSync />
           {children}
         </WagmiProvider>
       </QueryClientProvider>
