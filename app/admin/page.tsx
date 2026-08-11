@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { parseUnits } from "viem";
 import { API } from "@/lib/config";
@@ -24,6 +25,7 @@ type Pool = {
 // POST /api/admin/pool/create call we were previously making by hand with curl. Token lives in
 // sessionStorage only (cleared when the tab closes), never sent anywhere but this one endpoint.
 export default function Admin() {
+  const router = useRouter();
   const [token, setToken] = useState("");
   const [tokenDraft, setTokenDraft] = useState("");
 
@@ -118,7 +120,7 @@ export default function Admin() {
             onClick={saveToken} disabled={!tokenDraft.trim()}>
             Continue
           </button>
-          <Link href="/" className="daily-link">← Home</Link>
+          <button className="daily-link" onClick={() => router.back()}>← Back</button>
         </div>
       </main>
     );
@@ -211,7 +213,7 @@ export default function Admin() {
           onClick={() => { sessionStorage.removeItem("wb_admin_token"); setToken(""); }}>
           Log out
         </button>
-        <Link href="/" className="daily-link">← Home</Link>
+        <button className="daily-link" onClick={() => router.back()}>← Back</button>
       </div>
     </main>
   );
