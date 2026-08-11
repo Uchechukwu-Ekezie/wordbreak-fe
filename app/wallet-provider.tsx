@@ -106,7 +106,9 @@ function WalletProviderStub({ children }: { children: React.ReactNode }) {
   );
 }
 
+const hasPrivy = PRIVY_APP_ID.length > 8 && /^[a-zA-Z0-9]+$/.test(PRIVY_APP_ID);
+
 export function WalletProvider({ children }: { children: React.ReactNode }) {
-  if (!PRIVY_APP_ID) return <WalletProviderStub>{children}</WalletProviderStub>;
+  if (!hasPrivy) return <WalletProviderStub>{children}</WalletProviderStub>;
   return <WalletProviderInner>{children}</WalletProviderInner>;
 }

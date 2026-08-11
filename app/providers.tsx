@@ -11,8 +11,11 @@ import ActiveWalletSync from "./active-wallet-sync";
 
 const queryClient = new QueryClient();
 
+// Privy app IDs are alphanumeric; reject anything that looks like a placeholder or garbage.
+const hasPrivy = PRIVY_APP_ID.length > 8 && /^[a-zA-Z0-9]+$/.test(PRIVY_APP_ID);
+
 export function Providers({ children }: { children: ReactNode }) {
-  if (!PRIVY_APP_ID) return <>{children}</>;
+  if (!hasPrivy) return <>{children}</>;
   return (
     <PrivyProvider
       appId={PRIVY_APP_ID}
